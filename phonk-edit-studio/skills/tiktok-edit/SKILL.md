@@ -19,7 +19,7 @@ python scripts/check_env.py          # checks ffmpeg + installs numpy pillow sci
 - **Clip** (required). Files only — TikTok links usually cannot be downloaded from the sandbox; ask the user to download via ssstik/snaptik and attach.
 - **Watermark** (optional but most creators want it). Two kinds, use both if given:
   - *small mark* — always on screen, small, semi-transparent, bottom-centre: `--mark-image logo.png`, `--mark-text NAME`, or `--mark-video intro.mp4` (the logo is cut out of the creator's animated intro automatically).
-  - *animated watermark video* (e.g. a CapCut intro with the creator's name): `--wm-video intro.mp4` — played **once**, centred, **without its sound**, black background keyed out. Screen recordings of CapCut are fine: the canvas is detected and the app UI is cropped away.
+  - *animated watermark video* (e.g. a CapCut intro with the creator's name): `--wm-video intro.mp4` — played **once** (exactly one pass of the animation — recordings that loop it are cut to a single cycle automatically, never repeated or stretched), centred, **without its sound**, black background keyed out; its brightest moment lands on the drop. Screen recordings of CapCut are fine: the canvas is detected and the app UI is cropped away.
 - **Music** (optional) — see §3.
 - **Wishes**: length (default 18 s), pace (calm / medium / fast), effects (clean / hype), dialogue part (yes/no), format (default 1:1, 1080, 60 fps).
 
@@ -69,6 +69,7 @@ python scripts/make_edit.py render  --work W --out EDIT.mp4 [--mark-video X | --
 | слишком быстро / too fast | `--pace calm` or keep medium and use fewer 1-beat cuts |
 | медленно, мало эффектов | `--pace fast` and/or `--style hype` |
 | нет звука в начале | check audio levels of the first 2 s; the intro must be the track at full level |
+| вотермарка повторяется / много раз | it must be ONE pass: the engine auto-cuts one loop cycle; if it still repeats, set `--wm-src0 A --wm-src1 B` to one cycle (look at a contact sheet of the watermark video) |
 | вотермарка не та / не там | re-ask which file is the animated one and which is the small mark; adjust `--mark-width`, `--mark-opacity`, `--wm-start` |
 | криво / качество | check contact sheet for ghosting, blur, crop; render final at 1080/60, crf 13–14 |
 
