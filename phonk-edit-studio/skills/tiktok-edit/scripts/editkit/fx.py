@@ -2,6 +2,7 @@
 import math, random
 import numpy as np
 from PIL import Image, ImageFilter, ImageDraw
+from scipy.ndimage import map_coordinates
 
 
 def clamp(x, a=0.0, b=1.0): return a if x < a else b if x > b else x
@@ -14,7 +15,9 @@ def toA(im): return np.asarray(im, np.float32)
 class FX:
     # name -> default duration (s)
     DUR = {"flash": 0.22, "zoom": 0.2, "whip": 0.18, "whipR": 0.18, "whipU": 0.18, "circle": 0.34, "pip": 0.32,
-           "glitch": 0.16, "shake": 0.16, "rgb": 0.16, "spin": 0.22, "tile": 0.3, "cut": 0.0}
+           "glitch": 0.16, "shake": 0.16, "rgb": 0.16, "spin": 0.22, "tile": 0.3, "cut": 0.0,
+           # learned from reference edits (v1.1): exposure flash on bar downbeats, white box reveal, fisheye punch, light leak
+           "expo": 0.6, "box": 0.42, "lens": 0.24, "leak": 0.4}
 
     def __init__(self, S):
         self.S = S
@@ -23,6 +26,13 @@ class FX:
         self.VIG = np.clip(1.22 - self.RR / S * 0.8, 0.68, 1)[..., None]
         nr = np.random.default_rng(4)
         self.GR = [toA(toI(nr.normal(0, 6, (S // 2, S // 2)) + 128).resize((S, S)))[..., None] - 128 for _ in range(6)]
+        # light-leak texture: soft warm blobs (pink / orange / white), twice as wide as the frame so it can sweep across
+        lk = Image.new("RGB", (S * 2, S), (0, 0, 0)); d = ImageDraw.Draw(lk); lr = random.Random(11)
+        for _ in range(9):
+            cx, cy, r = lr.uniform(0, 2 * S), lr.uniform(0.1 * S, 0.9 * S), lr.uniform(0.12 * S, 0.3 * S)
+            d.ellipse((cx - r, cy - r * 0.6, cx + r, cy + r * 0.6), fill=lr.choice([(255, 110, 150), (255, 160, 80), (255, 230, 210), (255, 90, 120)]))
+        self.LEAK = toA(lk.filter(ImageFilter.GaussianBlur(S * 0.07)))
+        self.yy, self.xx = yy, xx
 
     # ---------- primitives
     def zoom_img(self, x, z, rot=0.0, dx=0, dy=0):
@@ -114,7 +124,40 @@ class FX:
             cx = S / 2 + 0.24 * S * q; cy = S / 2 - 0.18 * S * q
             base.alpha_composite(im, (int(cx - im.width / 2), int(cy - im.height / 2)))
             return toA(base.convert("RGB")), 0.0
+        if kind == "expo":   # refs: 2-3 frames of pure white on the cut, then the new shot burns off out of the white in ~0.3 s
+            if p < 0.44: return a, (p / 0.44) ** 6 * 0.55
+            if p < 0.56: return b, 1.0
+            u = (p - 0.56) / 0.44; return b, (1 - u) ** 1.5
+        if kind == "box":    # white box pops in the centre, the next shot appears inside it and the box grows to full frame
+            u = float(eio(p)); w = int(S * (0.42 + 0.58 * u)); h = int(S * (0.3 + 0.7 * u))
+            base = toI(a * (1 - 0.25 * u)).filter(ImageFilter.GaussianBlur(5 * u))
+            inner = b * (1 - clamp(1 - p / 0.3)) + 255 * clamp(1 - p / 0.3)       # first ~30 %: white card, then the shot fades in
+            base.paste(toI(inner).resize((w, h), Image.BILINEAR), ((S - w) // 2, (S - h) // 2))
+            return toA(base), 0.0
+        if kind == "lens":   # fisheye punch: barrel distortion peaks on the cut
+            src = a if p < 0.5 else b; k = 0.6 * sinp
+            if k < 0.02: return src, 0.0
+            c = (S - 1) / 2; nx = (self.xx - c) / c; ny = (self.yy - c) / c; r2 = nx * nx + ny * ny
+            f = (1 + k * r2) / (1 + k)                                           # sample farther out at the edges -> bulge
+            X = c + nx * f * c; Y = c + ny * f * c
+            out = np.dstack([map_coordinates(src[..., ch], [Y, X], order=1, mode="nearest") for ch in range(3)])
+            return self.radial_blur(out, 0.06 * sinp, 3), 0.1 * sinp
+        if kind == "leak":   # warm light leak sweeping across the cut (screen blend)
+            src = a if p < 0.5 else b; off = int(S * (1 - p))
+            lk = self.LEAK[:, off:off + S] * sinp * 1.1
+            return 255 - (255 - src) * (255 - np.clip(lk, 0, 255)) / 255, 0.05 * sinp
         return b, 0.0
+
+    def outro_diamond(self, x, q):
+        """refs: a white rotated square grows from the centre, covers the frame, then white fades to dark grey."""
+        S = self.S
+        if q < 0.6:
+            u = eio(q / 0.6); half = S * (0.08 + 0.9 * u); ang = math.radians(20 + 25 * u)
+            m = Image.new("L", (S, S), 0); c = S / 2
+            pts = [(c + half * math.cos(ang + k * math.pi / 2), c + half * math.sin(ang + k * math.pi / 2)) for k in range(4)]
+            ImageDraw.Draw(m).polygon(pts, fill=255); m = toA(m.filter(ImageFilter.GaussianBlur(1.5)))[..., None] / 255
+            return x * (1 - m) + 250 * m
+        u = (q - 0.6) / 0.4; return np.full_like(x, 250 - 205 * eio(u))
 
     def outro_circle(self, x, q):
         """shrink frame into a circle on black (q 0..1)."""

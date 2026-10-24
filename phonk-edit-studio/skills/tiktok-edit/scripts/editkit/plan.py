@@ -2,13 +2,17 @@
 import random
 
 PACE = {  # beats per cut (outside / inside dense parts), velocity speed range
-    "calm": dict(base=2, dense=2, speed=(0.9, 1.1)),
-    "medium": dict(base=2, dense=1, speed=(1.0, 1.15)),     # default — matches the reference edits (0.6–1.2 s per shot)
-    "fast": dict(base=1, dense=1, speed=(1.2, 1.6)),
+    "calm": dict(base=2, dense=2, speed=(0.9, 1.1)),         # ~1-1.2 s per shot
+    "medium": dict(base=1, dense=1, speed=(1.0, 1.2)),       # default = reference edits: a cut on EVERY beat (0.45-0.65 s); 2 beats if the tempo is very fast
+    "fast": dict(base=1, dense=1, speed=(1.2, 1.6)),         # every beat + faster velocity
 }
 TRANSITIONS = {
-    "clean": ["flash", "zoom", "whip", "circle", "pip", "glitch", "whipU", "shake", "zoom", "rgb", "flash", "whip"],
-    "hype": ["flash", "zoom", "whip", "glitch", "spin", "rgb", "tile", "whipU", "circle", "shake", "pip", "whipR"],
+    # refs: ~1/3 of cuts are plain hard cuts (with a zoom kick on the new shot), most others are motion-blur transitions,
+    # flashes sit on bar downbeats (added by the planner), "special" transitions (box, pip, circle, leak) are rare
+    "clean": ["cut", "zoom", "whip", "cut", "lens", "whipU", "cut", "zoom", "box", "cut", "whipR", "shake", "cut", "zoom", "glitch",
+              "cut", "whip", "leak", "cut", "lens", "pip", "cut", "whipU", "rgb", "cut", "zoom", "circle"],
+    "hype": ["cut", "zoom", "lens", "whip", "cut", "glitch", "whipU", "box", "cut", "spin", "rgb", "zoom", "cut", "leak", "shake",
+             "whipR", "cut", "tile", "lens", "pip", "cut", "circle", "whip"],
 }
 
 
@@ -16,7 +20,7 @@ def snap(t, grid):
     return min(grid, key=lambda g: abs(g - t)) if grid else t
 
 
-def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", target=18.0, intro_beats=4,
+def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", target=18.0, intro_beats=None,
                dialogue=None, drop=None, seed=7, size=1080, fps=60, music_is_clip=False):
     """
     shots   : [(s0, s1)] in clip seconds (already cropped clip)
@@ -27,6 +31,7 @@ def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", 
     rng = random.Random(seed)
     P = PACE.get(pace, PACE["medium"]); TR = TRANSITIONS.get(style, TRANSITIONS["clean"])
     beat = music.get("beat") or 0.5
+    if pace == "medium" and beat < 0.4: P = dict(P, base=2)      # >150 BPM: every beat would be < 0.4 s
     beats = sorted(music["beats"]); strong = sorted(music.get("strong", []))
     drop = drop if drop is not None else music["drop"]
     drop = snap(drop, beats + strong)
@@ -42,6 +47,9 @@ def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", 
         if abs(grid[k] - b) < beat * 0.25: grid[k] = b
     grid = sorted(grid)
 
+    if intro_beats is None:   # refs: a calm opening of ~2.5-4 s before the drop (4 beats on slow tracks, 8 on fast ones)
+        intro_beats = 4 if beat * 8 > 4.4 else 8
+        while intro_beats > 2 and drop - intro_beats * beat < 0: intro_beats -= 2
     m_start = max(0.0, drop - intro_beats * beat)
     if music_is_clip:  # use the clip's own soundtrack in place: video time == music time is not required, but keep length sane
         pass
@@ -94,13 +102,23 @@ def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", 
         if not nxt: break
         n = nxt[0]
         # if a strong hit sits within half a beat of this cut, move the cut onto it
-        hits = [s for s in strong if abs(s - n) <= beat * 0.55 and s > m + beat * 0.8]
+        hits = [s for s in strong if abs(s - n) <= beat * 0.3 and s > m + beat * 0.7]
         if hits: n = min(hits, key=lambda s: abs(s - n))
         cuts.append(n); m = n
     # the last bar is the hero/outro shot
     last_bar = m_end - 4 * beat * (1 if bars > 2 else 0.5)
     cuts = [c for c in cuts if c < last_bar - beat * 0.5] + [snap(last_bar, grid)]
     cuts = sorted(set(cuts))
+
+    # refs: overexposure flash on every bar downbeat (every 4 beats) after the drop -> the cut closest to it
+    expo_k = set()
+    bar_beats = 4 if P["base"] == 1 else 8
+    j = 1
+    while drop + bar_beats * j * beat < m_end - 2 * beat:
+        d = drop + bar_beats * j * beat
+        k_best = min(range(1, len(cuts) - 1), key=lambda i: abs(cuts[i] - d), default=None)
+        if k_best is not None and abs(cuts[k_best] - d) <= beat * 1.01: expo_k.add(k_best)
+        j += 1
 
     segs = []
     segs.append(dict(kind="intro", t0=T_intro0, t1=T_intro1, shot=list(shots[calm_shot]), frac=0.1, speed=0.6, tr=None))
@@ -118,15 +136,15 @@ def build_plan(shots, motion, music, clip_dur, *, pace="medium", style="clean", 
         frac = 0.0 if (b - a) < D * sp * 1.4 else rng.uniform(0, 0.4)
         tr = "flash" if k == 0 else ("zoom" if last else TR[(k - 1) % len(TR)])
         recent = [x.get("tr") for x in segs[-3:]]
-        if not last and k > 0 and any(abs(s - c) < 0.06 for s in strong) and tr not in ("flash", "zoom", "shake") \
-                and not any(r in ("flash", "shake") for r in recent[-2:]):
-            tr = "shake" if "flash" in recent else "flash"
-        if tr == "flash" and k > 0 and "flash" in recent[-2:]: tr = "zoom"
+        if not last and k > 0 and any(abs(s - c) < 0.06 for s in strong) and tr in ("whip", "whipR", "whipU"):
+            tr = "lens" if "lens" not in recent else "shake"       # strong hit -> punchy transition (flashes stay on bars)
+        if k in expo_k: tr = "expo"
+        elif tr in ("flash", "expo") and k > 0: tr = "zoom"
         segs.append(dict(kind="montage", t0=round(m2t(c), 4), t1=round(m2t(c1), 4), shot=[a, b], frac=round(frac, 3), speed=round(sp, 3), tr=tr))
     segs[-1]["t1"] = round(total, 4)
 
     accents = []
-    plan = dict(size=size, fps=fps, total=round(total, 4), outro="circle",
+    plan = dict(size=size, fps=fps, total=round(total, 4), outro=rng.choice(["circle", "diamond"]),
                 music=dict(start=round(m_start, 4), drop=round(drop, 4), end=round(m_end, 4), tail=tail),
                 timeline=dict(intro=[T_intro0, T_intro1], dialogue=[T_intro1, T_drop] if dialogue else None, drop=T_drop),
                 beats_t=[round(m2t(g), 4) for g in grid if drop <= g <= m_end],
