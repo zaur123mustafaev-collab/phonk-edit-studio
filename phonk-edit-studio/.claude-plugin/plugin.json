@@ -1,6 +1,6 @@
 {
   "name": "phonk-edit-studio",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "TikTok / Reels phonk edits from your clip: auto-crop, beat-synced cuts, transitions, velocity, your watermark, music (your track, the clip's phonk, or an original generated phonk).",
   "author": { "name": "zaur123mustafaev" },
   "keywords": ["tiktok", "edit", "phonk", "video", "reels", "amv"]
