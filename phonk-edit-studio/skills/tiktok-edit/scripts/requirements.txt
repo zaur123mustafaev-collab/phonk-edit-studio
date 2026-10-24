@@ -1,0 +1,7 @@
+numpy
+pillow
+scipy
+librosa
+soundfile
+# optional, dialogue edits only:
+# faster-whisper
