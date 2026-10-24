@@ -69,9 +69,40 @@ def mark_from_video(path, t=None):
     return rgba
 
 
+def one_cycle(path, c, max_len=6.0):
+    """Watermark recordings are often longer than the animation and loop it (CapCut preview loops).
+    Find the loop period and return (src0, src1, peak_offset) covering exactly ONE pass: lead-in -> peak -> fade-out."""
+    n = 48
+    p = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf",
+                        f"crop={c['w']}:{c['h']}:{c['x']}:{c['y']},fps=30,scale={n}:{n},format=gray",
+                        "-f", "rawvideo", "-"], capture_output=True)
+    f = np.frombuffer(p.stdout, np.uint8).reshape(-1, n * n).astype(np.float32)
+    N = len(f); dur = N / 30.0
+    if N < 45: return 0.0, min(dur, max_len), 0.6
+    br = f.mean(1)
+    # loop period: smallest lag where the video matches itself shifted (frame-wise mean abs diff)
+    lags = range(24, N // 2 + 1)                        # 0.8 s .. half the recording
+    d = np.array([np.abs(f[L:] - f[:-L]).mean() for L in lags]) if len(lags) else np.array([])
+    period = None
+    if len(d):
+        base = np.abs(f[1:] - f[:-1]).mean() + 1e-6       # typical frame-to-frame change
+        far = np.median(d)
+        for i in range(1, len(d) - 1):
+            if d[i] <= d[i - 1] and d[i] <= d[i + 1] and d[i] < 0.65 * far and d[i] < 6 * base + 6:
+                period = lags[i]; break
+    if period is None:                                   # not a loop: play it whole (capped)
+        return 0.0, min(dur, max_len), 0.6
+    # first big event (brightness peak), then end the pass at the darkest point before it repeats
+    p1 = int(np.argmax(br[:period + 1]))
+    seg = br[p1 + 1:min(N, p1 + period + 1)]
+    end = p1 + 1 + int(np.argmin(seg)) if len(seg) else min(N, p1 + period)
+    start = max(0, end - period)
+    return start / 30.0, min(end / 30.0, start / 30.0 + max_len), (p1 - start) / 30.0
+
+
 class Marks:
     def __init__(self, S, mark_img=None, mark_width=0.19, mark_opacity=0.68, mark_pos="bottom",
-                 video_path=None, video_size=0.52, video_opacity=0.62, video_start=None, video_src=(0.0, None)):
+                 video_path=None, video_size=0.52, video_opacity=0.62, video_start=None, video_src=(0.0, None), video_anchor=None):
         self.S = S
         self.mark = None
         if mark_img is not None:
@@ -86,14 +117,19 @@ class Marks:
             c = auto_crop(video_path, inset=2, expand=True)                    # also strips screen-recording UI around a CapCut canvas
             sz = int(S * video_size); sz -= sz % 2
             src0, src1 = video_src
-            dur = probe(video_path)["duration"]; src1 = min(src1 or dur, src0 + 6.0, dur)
+            dur = probe(video_path)["duration"]
+            peak = 0.6
+            if src1 is None and not src0:                # auto: exactly one pass of the animation, never looped
+                src0, src1, peak = one_cycle(video_path, c)
+            src1 = min(src1 or dur, src0 + 6.0, dur)
+            self.v_src = (round(src0, 2), round(src1, 2))
             p = subprocess.run(["ffmpeg", "-loglevel", "error", "-ss", str(src0), "-t", str(src1 - src0), "-i", video_path,
                                 "-vf", f"crop={c['w']}:{c['h']}:{c['x']}:{c['y']},fps=30,scale={sz}:{sz}:flags=lanczos",
                                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
             self.vid = np.frombuffer(p.stdout, np.uint8).reshape(-1, sz, sz, 3)
             yy, xx = np.mgrid[0:sz, 0:sz].astype(np.float32)
             self.v_mask = (np.clip((sz / 2 - np.sqrt((xx - sz / 2) ** 2 + (yy - sz / 2) ** 2)) / (sz * 0.125), 0, 1) ** 1.2)[..., None] * video_opacity
-            self.v_sz = sz; self.v_start = video_start or 0.0; self.v_len = len(self.vid) / 30.0
+            self.v_sz = sz; self.v_start = video_start if video_start is not None else max(0.0, (video_anchor or 0.0) - peak); self.v_len = len(self.vid) / 30.0
 
     def apply(self, x, t):
         S = self.S
