@@ -4,6 +4,7 @@
   python make_edit.py analyze --clip CLIP.mp4 [--music TRACK.mp3] [--transcribe] --work WORK
   python make_edit.py plan    --work WORK [--music-source auto|file|clip|phonk] [--pace calm|medium|fast]
                               [--style clean|hype] [--target 18] [--dialogue 11.1-16.5] [--drop 3.55] [--seed 7]
+                              [--caption "TEXT"] [--outro circle|diamond|fade]
   python make_edit.py preview --work WORK [--times 1,5,9]           -> WORK/preview.jpg (contact sheet)
   python make_edit.py render  --work WORK --out EDIT.mp4 [--mark-video WM.mp4] [--mark-image LOGO.png | --mark-text NAME]
                               [--wm-video WM.mp4 --wm-start 7.2] [--fps 60] [--size 1080]
@@ -80,6 +81,8 @@ def cmd_plan(a):
     P = planmod.build_plan(A["shots"], A["motion"], M, A["info"]["duration"], pace=a.pace, style=a.style, target=a.target,
                            dialogue=dialogue, drop=a.drop, seed=a.seed, size=a.size, fps=a.fps, intro_beats=a.intro_beats)
     P["music_source"] = src; P["music_path"] = music_path; P["clip"] = A["clip"]; P["crop"] = A["crop"]
+    if a.caption: P["caption"] = a.caption
+    if a.outro: P["outro"] = a.outro
     if dialogue and A.get("transcript"):  # zoom accents on the last word of each sentence of the dialogue
         acc = []
         for s in A["transcript"]:
@@ -142,7 +145,9 @@ def main():
         p.add_argument("--target", type=float, default=18.0)
         p.add_argument("--dialogue", default=None, help="clip seconds, e.g. 11.1-16.5")
         p.add_argument("--drop", type=float, default=None, help="override drop time in the music (seconds)")
-        p.add_argument("--intro-beats", type=int, default=4)
+        p.add_argument("--intro-beats", type=int, default=None, help="default: auto, ~2.5-4 s calm opening")
+        p.add_argument("--caption", default=None, help="meme caption in a white bar at the top during the intro")
+        p.add_argument("--outro", default=None, choices=["circle", "diamond", "fade"], help="default: random circle/diamond")
         p.add_argument("--seed", type=int, default=7)
         p.add_argument("--bpm", type=int, default=None, help="phonk generator tempo")
         p.add_argument("--size", type=int, default=1080)
