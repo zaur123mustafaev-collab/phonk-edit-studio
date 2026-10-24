@@ -103,8 +103,8 @@ def _marks(a, P):
     elif a.mark_text: mark = text_mark(a.mark_text)
     elif a.mark_video: mark = mark_from_video(a.mark_video)
     if mark is None and not a.wm_video: return None
-    wm_start = a.wm_start if a.wm_start is not None else max(0.0, P["timeline"]["drop"] - 0.6)
-    return Marks(P["size"], mark_img=mark, video_path=a.wm_video, video_start=wm_start,
+    # default: the brightest moment of the watermark animation lands on the drop
+    return Marks(P["size"], mark_img=mark, video_path=a.wm_video, video_start=a.wm_start, video_anchor=P["timeline"]["drop"],
                  video_src=(a.wm_src0, a.wm_src1), mark_width=a.mark_width, mark_opacity=a.mark_opacity)
 
 
@@ -151,7 +151,7 @@ def main():
         p.add_argument("--mark-image"); p.add_argument("--mark-text"); p.add_argument("--mark-video", help="take the small always-on mark from a logo video")
         p.add_argument("--mark-width", type=float, default=0.19); p.add_argument("--mark-opacity", type=float, default=0.68)
         p.add_argument("--wm-video", help="animated watermark video, played once, centred, silent")
-        p.add_argument("--wm-start", type=float, default=None); p.add_argument("--wm-src0", type=float, default=0.0); p.add_argument("--wm-src1", type=float, default=None, help="default: whole video, max 6 s")
+        p.add_argument("--wm-start", type=float, default=None); p.add_argument("--wm-src0", type=float, default=0.0); p.add_argument("--wm-src1", type=float, default=None, help="default: auto - exactly one pass of the animation (loops in the recording are cut), max 6 s")
     p = sub.add_parser("analyze"); common(p); p.add_argument("--clip", required=True); p.add_argument("--music"); p.add_argument("--transcribe", action="store_true"); p.add_argument("--no-crop", action="store_true")
     p = sub.add_parser("plan"); common(p); plan_args(p)
     p = sub.add_parser("preview"); common(p); p.add_argument("--times"); mark_args(p)
