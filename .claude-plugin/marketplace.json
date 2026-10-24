@@ -1,1 +1,7 @@
-{"name":"phonk-edit-studio-marketplace","owner":{"name":"zaur123mustafaev-collab"},"plugins":[{"name":"phonk-edit-studio","source":"./phonk-edit-studio","description":"TikTok phonk edits made with code."}]}
+{
+  "name": "phonk-edit-studio-marketplace",
+  "owner": { "name": "zaur123mustafaev" },
+  "plugins": [
+    { "name": "phonk-edit-studio", "source": "./phonk-edit-studio", "description": "TikTok phonk edits made with code." }
+  ]
+}
